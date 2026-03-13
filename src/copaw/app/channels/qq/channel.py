@@ -12,6 +12,7 @@ Rich media read (images, videos, files)
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -70,7 +71,10 @@ MAX_QUICK_DISCONNECT_COUNT = 3
 DEFAULT_API_BASE = "https://api.sgroup.qq.com"
 TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken"
 _URL_PATTERN = re.compile(r"https?://[^\s]+", re.IGNORECASE)
-_IMAGE_TAG_PATTERN = re.compile(r"\[Image: (https?://[^\]]+)\]", re.IGNORECASE)
+_IMAGE_TAG_PATTERN = re.compile(
+    r"\[Image: ((?:https?|file)://[^\]]+)\]",
+    re.IGNORECASE,
+)
 
 # Rich media paths
 _DEFAULT_MEDIA_DIR = Path("~/.copaw/media/qq").expanduser()
@@ -338,9 +342,38 @@ async def _upload_media_async(
 
         body = {
             "file_type": media_type,
-            "url": url,
             "srv_send_msg": False,
         }
+
+        # Handle local file paths
+        if url.startswith("file://"):
+            local_path = url[7:]  # Remove file:// prefix
+
+            # Windows path handling: file:///C:/path -> C:/path
+            if (
+                os.name == "nt"
+                and len(local_path) >= 3
+                and local_path.startswith("/")
+                and local_path[1].isalpha()
+                and local_path[2] == ":"
+            ):
+                local_path = local_path[1:]
+
+            if not os.path.exists(local_path):
+                logger.warning(f"Local file not found: {local_path}")
+                return None
+
+            # Read file and convert to Base64
+            try:
+                with open(local_path, "rb") as f:
+                    file_content = f.read()
+                body["file_data"] = base64.b64encode(file_content).decode()
+            except Exception:
+                logger.exception(f"Failed to read local file: {local_path}")
+                return None
+        else:
+            body["url"] = url
+
         response = await _api_request_async(
             session,
             access_token,
